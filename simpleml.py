@@ -29,6 +29,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import f1_score
 from sklearn.metrics import make_scorer
 from sklearn.metrics import classification_report
+from sklearn.naive_bayes import MultinomialNB
     
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -290,6 +291,32 @@ def builingModel():
     return X, Y, withOverwiews
 
 
+# Standard precision recall metrics
+def precisionRecall(gt, preds):
+    TP = 0
+    FP = 0
+    FN = 0
+    for t in gt:
+        if t in preds:
+            TP += 1
+        else:
+            FN += 1
+    for p in preds:
+        if p not in gt:
+            FP += 1
+    if TP + FP == 0:
+        precision = 0
+    else:
+        precision = TP / float(TP + FP)
+    if TP + FN == 0:
+        recall = 0
+    else:
+        recall = TP / float(TP + FN)
+    return precision, recall
+
+"""
+Start
+"""
 X, Y, Movies = builingModel()
 
 tfidf_transformer = TfidfTransformer()
@@ -304,22 +331,25 @@ positions = range(len(Movies))
 
 testMovies = np.asarray(positions)[~msk]
 
+GenreIDtoName = getGenresIds()
+
+genreList = sorted(list(GenreIDtoName.keys()))
+
+"""
+Use SVM (Support vector machine) Model
+"""
 parameters = {'kernel':['linear'], 'C':[0.01, 0.1, 1.0]}
 gridCV = GridSearchCV(SVC(class_weight='balanced'), parameters, cv=3, scoring=make_scorer(f1_score, average='micro'), iid=True)
 classif = OneVsRestClassifier(gridCV)
 
-print('Training...')
+print('SVM Training...')
 train = classif.fit(X_train_tfidf, Y_train)
 
-print('Testing...')
+print('SVM Testing...')
 predstfidf = classif.predict(X_test_tfidf)
 
-print('Report : ')
+print('SVM Report : ')
 print(classification_report(Y_test, predstfidf))
-
-GenreIDtoName = getGenresIds()
-
-genreList = sorted(list(GenreIDtoName.keys()))
 
 predictions = []
 for i in range(X_test_tfidf.shape[0]):
@@ -338,3 +368,70 @@ for i in range(X_test_tfidf.shape[0]):
         for j in range(len(Movies[i]['genre_ids'])):
             real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
         print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictions[i]), ',\tREAL: ', ','.join(real))
+
+precs = []
+recs = []
+for i in range(len(testMovies)):
+    if i % 1 == 0:
+        pos = testMovies[i]
+        test = Movies[pos]
+        gtids = test['genre_ids']
+        gt = []
+        for g in gtids:
+            gname = GenreIDtoName[g]
+            gt.append(gname)
+        a, b = precisionRecall(gt, predictions[i])
+        precs.append(a)
+        recs.append(b)
+
+print('SVM Precision Recall : ')
+print(np.mean(np.asarray(precs)), np.mean(np.asarray(recs)))
+
+"""
+Use Multinomial Naive Bayes Model
+"""
+classifnb = OneVsRestClassifier(MultinomialNB())
+
+print('NB Training...')
+classifnb.fit(X[msk].toarray(), Y_train)
+
+print('NB Testing...')
+predsnb = classifnb.predict(X[~msk].toarray())
+
+print('NB Report : ')
+print(classification_report(Y_test, predsnb))
+
+predictionsnb = []
+for i in range(X_test_tfidf.shape[0]):
+    predGenres = []
+    movieLabelScores = predsnb[i]
+    for j in range(len(movieLabelScores)):
+        if movieLabelScores[j] != 0:
+            genre = GenreIDtoName[genreList[j]]
+            predGenres.append(genre)
+    predictionsnb.append(predGenres)
+
+for i in range(X_test_tfidf.shape[0]):
+    if i % 50 == 0 and i != 0:
+        real = []
+        for j in range(len(Movies[i]['genre_ids'])):
+            real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
+        print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictionsnb[i]), ',\tREAL: ', ','.join(real))
+
+precs = []
+recs = []
+for i in range(len(testMovies)):
+    if i % 1 == 0:
+        pos = testMovies[i]
+        test = Movies[pos]
+        gtids = test['genre_ids']
+        gt = []
+        for g in gtids:
+            gname = GenreIDtoName[g]
+            gt.append(gname)
+        a, b = precisionRecall(gt, predictionsnb[i])
+        precs.append(a)
+        recs.append(b)
+
+print('NB Precision Recall : ')
+print(np.mean(np.asarray(precs)), np.mean(np.asarray(recs)))
