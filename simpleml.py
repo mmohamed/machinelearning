@@ -17,7 +17,6 @@ import seaborn as sns
 import pickle
 import sys
 import os.path
-import warnings
 
 import pprint
 
