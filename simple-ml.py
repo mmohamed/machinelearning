@@ -17,52 +17,46 @@ import seaborn as sns
 import pickle
 import sys
 import os.path
+import warnings
 
 import pprint
 
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import f1_score
+from sklearn.metrics import make_scorer
+from sklearn.metrics import classification_report
+    
 pp = pprint.PrettyPrinter(indent=4)
+
+warnings.filterwarnings('ignore') 
 
 tmdb.API_KEY = '9d82bc45b4569d6608d9fbc809d4c5ac' 
 search = tmdb.Search()
 
 
 def grab_poster_tmdb(movie):
-    poster_folder='posters_final/'
+    poster_folder = 'posters_final/'
     if not poster_folder.split('/')[0] in os.listdir('./'):
-       os.mkdir('./'+poster_folder)
+       os.mkdir('./' + poster_folder)
     response = search.movie(query=movie)
     id = response['results'][0]['id']
     movie = tmdb.Movies(id)
     posterp = movie.info()['poster_path']
     title = movie.info()['original_title']
+    title = '_'.join(title.split(' '))
+    title = '_'.join(title.split('/'))
+    title = '_'.join(title.split(':'))
     if os.path.isfile(poster_folder + title + '.jpg '):
         return
     url = 'http://image.tmdb.org/t/p/original' + posterp
-    title = '_'.join(title.split(' '))
-    f = open(poster_folder + title + '.jpg ','wb')
+    f = open(poster_folder + title + '.jpg ', 'wb')
     f.write(urllib.request.urlopen(url).read())
     f.close()
-
-def get_movie_id_tmdb(movie):
-    response = search.movie(query=movie)
-    movie_id = response['results'][0]['id']
-    return movie_id
-
-
-def get_movie_info_tmdb(movie):
-    response = search.movie(query=movie)
-    id = response['results'][0]['id']
-    movie = tmdb.Movies(id)
-    info = movie.info()
-    return info
-
-
-def get_movie_genres_tmdb(movie):
-    response = search.movie(query=movie)
-    id = response['results'][0]['id']
-    movie = tmdb.Movies(id)
-    genres = movie.info()['genres']
-    return genres
 
 
 def saveMovies():
@@ -200,7 +194,7 @@ def clover(movies):
             time.sleep(1)
             poster_movies.append(movie)
         except Exception as e:
-            print('Error on getting poster for ', title, ' caused by , ', str(e) ,', try again...')
+            print('Error on getting poster for ', title, ' caused by , ', str(e) , ', try again...')
             try:
                 time.sleep(7)
                 grab_poster_tmdb(title)
@@ -231,7 +225,7 @@ def getWithOverwiews(movies):
     return moviesWithOverviews        
 
 
-def getBinarizedVectorOgGenres(movies):
+def getBinarizedVectorOfGenres(movies):
     genres = []
     all_ids = []
     for i in range(len(movies)):
@@ -241,12 +235,107 @@ def getBinarizedVectorOgGenres(movies):
         genres.append(genre_ids)
         all_ids.extend(genre_ids)
     
-    from sklearn.preprocessing import MultiLabelBinarizer
     mlb = MultiLabelBinarizer()
-    Y = mlb.fit_transform(genres)
+    return mlb.fit_transform(genres)
 
-        
-pull()
-cleanedMovieList = clean()
-#clover(cleanedMovieList)
-withOverwiews = getWithOverwiews(cleanedMovieList)
+     
+def getBinarizedVectorOfOverview(movies):
+    content = []
+    for i in range(len(movies)):
+        movie = movies[i]
+        id = movie['id']
+        overview = movie['overview']
+        overview = overview.replace(',', '')
+        overview = overview.replace('.', '')
+        content.append(overview)
+    vectorize = CountVectorizer(max_df=0.95, min_df=0.005)
+    return vectorize.fit_transform(content)
+
+
+def builingModel():      
+    if os.path.isfile('X.pckl') and os.path.isfile('Y.pckl') and os.path.isfile('Movies.pckl'):
+        print('Model already builded !')
+        xdb = open('X.pckl', 'rb')
+        ydb = open('Y.pckl', 'rb')
+        X = pickle.load(xdb)
+        Y = pickle.load(ydb)
+        mdb = open('Movies.pckl', 'rb')
+        Movies = pickle.load(mdb)
+        xdb.close()
+        ydb.close()
+        return X, Y, Movies
+    
+    pull()
+    cleanedMovieList = clean()
+    # clover(cleanedMovieList)
+    withOverwiews = getWithOverwiews(cleanedMovieList)
+    
+    Y = getBinarizedVectorOfGenres(withOverwiews)
+    
+    X = getBinarizedVectorOfOverview(withOverwiews)
+    
+    # save model 
+    print('Saving model..')
+    xdb = open('X.pckl', 'wb')
+    ydb = open('Y.pckl', 'wb')
+    pickle.dump(X, xdb)
+    pickle.dump(Y, ydb)
+    mdb = open('Movies.pckl', 'wb')
+    pickle.dump(withOverwiews, mdb)
+    genredb = open('Genredict.pckl', 'wb')
+    pickle.dump(getGenresIds(), genredb)
+    xdb.close()
+    ydb.close()
+    mdb.close()
+    genredb.close()
+    return X, Y, withOverwiews
+
+
+X, Y, Movies = builingModel()
+
+tfidf_transformer = TfidfTransformer()
+X_tfidf = tfidf_transformer.fit_transform(X)
+
+msk = np.random.rand(X_tfidf.shape[0]) < 0.8
+X_train_tfidf = X_tfidf[msk]
+X_test_tfidf = X_tfidf[~msk]
+Y_train = Y[msk]
+Y_test = Y[~msk]
+positions = range(len(Movies))
+
+testMovies = np.asarray(positions)[~msk]
+
+parameters = {'kernel':['linear'], 'C':[0.01, 0.1, 1.0]}
+gridCV = GridSearchCV(SVC(class_weight='balanced'), parameters, cv=3, scoring=make_scorer(f1_score, average='micro'), iid=True)
+classif = OneVsRestClassifier(gridCV)
+
+print('Training...')
+train = classif.fit(X_train_tfidf, Y_train)
+
+print('Testing...')
+predstfidf = classif.predict(X_test_tfidf)
+
+print('Report : ')
+print(classification_report(Y_test, predstfidf))
+
+GenreIDtoName = getGenresIds()
+
+genreList = sorted(list(GenreIDtoName.keys()))
+
+predictions = []
+for i in range(X_test_tfidf.shape[0]):
+    predGenres = []
+    movieLabelScores = predstfidf[i]
+    for j in range(len(movieLabelScores)):
+        if movieLabelScores[j] != 0:
+            genre = GenreIDtoName[genreList[j]]
+            predGenres.append(genre)
+    predictions.append(predGenres)
+
+# View result and compare    
+for i in range(X_test_tfidf.shape[0]):
+    if i % 50 == 0 and i != 0:
+        real = []
+        for j in range(len(Movies[i]['genre_ids'])):
+            real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
+        print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictions[i]), ',\tREAL: ', ','.join(real))
