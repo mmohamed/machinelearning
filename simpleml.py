@@ -129,7 +129,7 @@ def pull():
     allIds = getGenresIds()
     for g_id in allIds:
         baseyear -= 1
-        for page in range(1, 6, 1):
+        for page in range(1, 60, 1):
             time.sleep(0.5)
         
             url = 'https://api.themoviedb.org/3/discover/movie?api_key=' + tmdb.API_KEY
