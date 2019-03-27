@@ -30,6 +30,7 @@ from sklearn.metrics import f1_score
 from sklearn.metrics import make_scorer
 from sklearn.metrics import classification_report
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.ensemble import RandomForestClassifier
     
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -102,6 +103,12 @@ def list2pairs(l):
     
  
 def getGenresIds():
+    if os.path.isfile('genresids.pckl'):
+        fp = open("genresids.pckl", 'rb')
+        GenreIDtoName = pickle.load(fp)
+        fp.close()
+        return GenreIDtoName
+    
     genres = tmdb.Genres()
     
     list_of_genres = genres.movie_list()['genres']
@@ -112,7 +119,12 @@ def getGenresIds():
         genre_name = list_of_genres[i]['name']
         GenreIDtoName[genre_id] = genre_name
     # Add not found "Foreign genre"    
-    GenreIDtoName[10769] = "Foreign"        
+    GenreIDtoName[10769] = "Foreign"  
+    
+    fp = open("genresids.pckl", 'wb')
+    pickle.dump(GenreIDtoName, fp)
+    fp.close()
+          
     return GenreIDtoName
 
 
@@ -143,9 +155,9 @@ def pull():
         done_ids.append(str(g_id))
     print("Pulled movies for genres - " + ','.join(done_ids))
     
-    f6 = open("movies_for_posters.pckl", 'wb')
-    pickle.dump(movies, f6)
-    f6.close()
+    fp = open("movies_for_posters.pckl", 'wb')
+    pickle.dump(movies, fp)
+    fp.close()
     print("Movies saved - " + str(len(movies)))
     return movies
 
@@ -155,9 +167,9 @@ def clean():
         print('Movies fiel data not found !')
         return
     print('Starting cleaning movies list')
-    f6 = open("movies_for_posters.pckl", 'rb')
-    movies = pickle.load(f6)
-    f6.close()
+    fp = open("movies_for_posters.pckl", 'rb')
+    movies = pickle.load(fp)
+    fp.close()
     movie_ids = [m['id'] for m in movies]
     print("originally we had ", len(movie_ids), " movies")
     movie_ids = np.unique(movie_ids)
@@ -227,14 +239,8 @@ def getWithOverwiews(movies):
 
 def getBinarizedVectorOfGenres(movies):
     genres = []
-    all_ids = []
     for i in range(len(movies)):
-        movie = movies[i]
-        id = movie['id']
-        genre_ids = movie['genre_ids']
-        genres.append(genre_ids)
-        all_ids.extend(genre_ids)
-    
+        genres.append(movies[i]['genre_ids'])
     mlb = MultiLabelBinarizer()
     return mlb.fit_transform(genres)
 
@@ -314,6 +320,25 @@ def precisionRecall(gt, preds):
         recall = TP / float(TP + FN)
     return precision, recall
 
+def calculateMetrics(predictions, GenreIDtoName, testMovies, Movies):
+    precs = []
+    recs = []
+    
+    for i in range(len(testMovies)):
+        if i % 1 == 0:
+            pos = testMovies[i]
+            test = Movies[pos]
+            gtids = test['genre_ids']
+            gt = []
+            for g in gtids:
+                gname = GenreIDtoName[g]
+                gt.append(gname)
+            a, b = precisionRecall(gt, predictions[i])
+            precs.append(a)
+            recs.append(b)
+            
+    return precs, recs
+
 """
 Start
 """
@@ -334,6 +359,47 @@ testMovies = np.asarray(positions)[~msk]
 GenreIDtoName = getGenresIds()
 
 genreList = sorted(list(GenreIDtoName.keys()))
+
+
+
+"""
+Use Random Forest Model
+"""
+
+classif = RandomForestClassifier(n_estimators=100,n_jobs=10)
+
+print('RF Training...')
+train = classif.fit(X_train_tfidf, Y_train)
+
+print('RF Testing...')
+predstfidf = classif.predict(X_test_tfidf)
+
+print('RF Report : ')
+print(classification_report(Y_test, predstfidf))
+
+predictionsrf = []
+for i in range(X_test_tfidf.shape[0]):
+    predGenres = []
+    movieLabelScores = predstfidf[i]
+    for j in range(len(movieLabelScores)):
+        if movieLabelScores[j] != 0:
+            genre = GenreIDtoName[genreList[j]]
+            predGenres.append(genre)
+    predictionsrf.append(predGenres)
+
+# View result and compare    
+for i in range(X_test_tfidf.shape[0]):
+    if i % 50 == 0 and i != 0:
+        real = []
+        for j in range(len(Movies[i]['genre_ids'])):
+            real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
+        print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictionsrf[i]), ',\tREAL: ', ','.join(real))
+
+precs, recs = calculateMetrics(predictionsrf, GenreIDtoName, testMovies, Movies)
+
+print('RF Precision-Recall : ')
+print('Precision AVG: ', np.mean(np.asarray(precs)), 'Recall AVG:', np.mean(np.asarray(recs)))
+
 
 """
 Use SVM (Support vector machine) Model
@@ -369,23 +435,10 @@ for i in range(X_test_tfidf.shape[0]):
             real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
         print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictions[i]), ',\tREAL: ', ','.join(real))
 
-precs = []
-recs = []
-for i in range(len(testMovies)):
-    if i % 1 == 0:
-        pos = testMovies[i]
-        test = Movies[pos]
-        gtids = test['genre_ids']
-        gt = []
-        for g in gtids:
-            gname = GenreIDtoName[g]
-            gt.append(gname)
-        a, b = precisionRecall(gt, predictions[i])
-        precs.append(a)
-        recs.append(b)
+precs, recs = calculateMetrics(predictions, GenreIDtoName, testMovies, Movies)
 
-print('SVM Precision Recall : ')
-print(np.mean(np.asarray(precs)), np.mean(np.asarray(recs)))
+print('SVM Precision-Recall : ')
+print('Precision AVG: ', np.mean(np.asarray(precs)), 'Recall AVG:', np.mean(np.asarray(recs)))
 
 """
 Use Multinomial Naive Bayes Model
@@ -418,20 +471,7 @@ for i in range(X_test_tfidf.shape[0]):
             real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
         print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictionsnb[i]), ',\tREAL: ', ','.join(real))
 
-precs = []
-recs = []
-for i in range(len(testMovies)):
-    if i % 1 == 0:
-        pos = testMovies[i]
-        test = Movies[pos]
-        gtids = test['genre_ids']
-        gt = []
-        for g in gtids:
-            gname = GenreIDtoName[g]
-            gt.append(gname)
-        a, b = precisionRecall(gt, predictionsnb[i])
-        precs.append(a)
-        recs.append(b)
+precs, recs = calculateMetrics(predictionsnb, GenreIDtoName, testMovies, Movies)
 
-print('NB Precision Recall : ')
-print(np.mean(np.asarray(precs)), np.mean(np.asarray(recs)))
+print('NB Precision-Recall : ')
+print('Precision AVG: ', np.mean(np.asarray(precs)), 'Recall AVG:', np.mean(np.asarray(recs)))
