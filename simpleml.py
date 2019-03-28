@@ -141,17 +141,21 @@ def pull():
     allIds = getGenresIds()
     for g_id in allIds:
         baseyear -= 1
-        for page in range(1, 60, 1):
+        for page in range(1, 100, 1):
             time.sleep(0.5)
         
             url = 'https://api.themoviedb.org/3/discover/movie?api_key=' + tmdb.API_KEY
             url += '&language=en-US&sort_by=popularity.desc&year=' + str(baseyear) 
             url += '&with_genres=' + str(g_id) + '&page=' + str(page)
+            
+            try:
+                data = urllib.request.urlopen(url).read()
     
-            data = urllib.request.urlopen(url).read()
-    
-            dataDict = json.loads(data)
-            movies.extend(dataDict['results'])
+                dataDict = json.loads(data)
+                movies.extend(dataDict['results'])
+            except Exception as e:
+                print('Error on loading movies lust page ', page, ' caused by , ', str(e) , ', try again...')
+                
         done_ids.append(str(g_id))
     print("Pulled movies for genres - " + ','.join(done_ids))
     
@@ -236,12 +240,22 @@ def getWithOverwiews(movies):
     print("After removing movies without overviews we have ", len(moviesWithOverviews), " movies")      
     return moviesWithOverviews        
 
-
 def getBinarizedVectorOfGenres(movies):
     genres = []
     for i in range(len(movies)):
         genres.append(movies[i]['genre_ids'])
     mlb = MultiLabelBinarizer()
+    return mlb.fit_transform(genres)
+
+def getBinarizedVectorOfGenresForOne(movies, refid):
+    genres = []
+    for i in range(len(movies)):
+        val = 0
+        if refid in movies[i]['genre_ids']: 
+            val = 1
+        genres.append(val)
+    from sklearn.preprocessing import LabelBinarizer
+    mlb = LabelBinarizer()
     return mlb.fit_transform(genres)
 
      
@@ -259,7 +273,7 @@ def getBinarizedVectorOfOverview(movies):
 
 
 def builingModel():      
-    if os.path.isfile('X.pckl') and os.path.isfile('Y.pckl') and os.path.isfile('Movies.pckl'):
+    if os.path.isfile('X.pckl') and os.path.isfile('Y.pckl') and os.path.isfile('Ymulti.pckl') and os.path.isfile('Movies.pckl'):
         print('Model already builded !')
         xdb = open('X.pckl', 'rb')
         ydb = open('Y.pckl', 'rb')
@@ -276,25 +290,35 @@ def builingModel():
     # clover(cleanedMovieList)
     withOverwiews = getWithOverwiews(cleanedMovieList)
     
-    Y = getBinarizedVectorOfGenres(withOverwiews)
+    Ymulti = []
     
+    genres = getGenresIds()
+    
+    for genre in genres:
+        Ymulti.append({'id' : genre, 'Y': getBinarizedVectorOfGenresForOne(withOverwiews, genre)})
+    
+    Y = getBinarizedVectorOfGenres(withOverwiews)
+
     X = getBinarizedVectorOfOverview(withOverwiews)
     
     # save model 
     print('Saving model..')
     xdb = open('X.pckl', 'wb')
     ydb = open('Y.pckl', 'wb')
+    ymdb = open('Ymulti.pckl', 'wb')
     pickle.dump(X, xdb)
     pickle.dump(Y, ydb)
+    pickle.dump(Ymulti, ymdb)
     mdb = open('Movies.pckl', 'wb')
     pickle.dump(withOverwiews, mdb)
     genredb = open('Genredict.pckl', 'wb')
-    pickle.dump(getGenresIds(), genredb)
+    pickle.dump(genres, genredb)
     xdb.close()
     ydb.close()
+    ymdb.close()
     mdb.close()
     genredb.close()
-    return X, Y, withOverwiews
+    return X, Y, Ymulti, withOverwiews
 
 
 # Standard precision recall metrics
@@ -342,7 +366,7 @@ def calculateMetrics(predictions, GenreIDtoName, testMovies, Movies):
 """
 Start
 """
-X, Y, Movies = builingModel()
+X, Y, Ymulti, Movies = builingModel()
 
 tfidf_transformer = TfidfTransformer()
 X_tfidf = tfidf_transformer.fit_transform(X)
@@ -352,6 +376,7 @@ X_train_tfidf = X_tfidf[msk]
 X_test_tfidf = X_tfidf[~msk]
 Y_train = Y[msk]
 Y_test = Y[~msk]
+
 positions = range(len(Movies))
 
 testMovies = np.asarray(positions)[~msk]
@@ -359,6 +384,48 @@ testMovies = np.asarray(positions)[~msk]
 GenreIDtoName = getGenresIds()
 
 genreList = sorted(list(GenreIDtoName.keys()))
+
+
+"""
+Use Random Forest Model for Each Label (binary mode)
+"""
+
+predictions = []
+
+for subY in Ymulti:
+    Yid = subY['Y']
+    id = subY['id']
+    Y_sub_train = Yid[msk]
+    Y_sub_test = Yid[~msk]
+    
+    classif = RandomForestClassifier(n_estimators=100,n_jobs=10)
+    
+    print('Binary RF Training for ', GenreIDtoName[id], '...')
+    train = classif.fit(X_train_tfidf, Y_sub_train)
+
+    print('Binary RF Testing for', GenreIDtoName[id], '...')
+    predstfidf = classif.predict(X_test_tfidf)
+  
+    for i in range(X_test_tfidf.shape[0]):
+        if(len(predictions) < i+1):
+            predictions.append([])
+        if 1 == predstfidf[i]:
+            predictions[i].append(GenreIDtoName[id]) 
+
+for i in range(X_test_tfidf.shape[0]):
+    if i % 50 == 0 and i != 0:
+        real = []
+        for j in range(len(Movies[i]['genre_ids'])):
+            real.append(GenreIDtoName[Movies[i]['genre_ids'][j]])
+        print('MOVIE: ', Movies[i]['title'], '\tPREDICTION: ', ','.join(predictions[i]), ',\tREAL: ', ','.join(real))
+             
+precs, recs = calculateMetrics(predictions, GenreIDtoName, testMovies, Movies)
+
+print('Binary RF Global Precision-Recall : ')
+print('Precision AVG: ', np.mean(np.asarray(precs)), 'Recall AVG:', np.mean(np.asarray(recs)))
+
+
+
 
 
 
