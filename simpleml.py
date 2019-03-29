@@ -31,6 +31,7 @@ from sklearn.metrics import make_scorer
 from sklearn.metrics import classification_report
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelBinarizer
     
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -40,7 +41,7 @@ tmdb.API_KEY = '9d82bc45b4569d6608d9fbc809d4c5ac'
 search = tmdb.Search()
 
 
-def grab_poster_tmdb(movie):
+def grabPosterTmdb(movie):
     poster_folder = 'posters_final/'
     if not poster_folder.split('/')[0] in os.listdir('./'):
        os.mkdir('./' + poster_folder)
@@ -58,39 +59,6 @@ def grab_poster_tmdb(movie):
     f = open(poster_folder + title + '.jpg ', 'wb')
     f.write(urllib.request.urlopen(url).read())
     f.close()
-
-
-def saveMovies():
-    if os.path.isfile('movie_list.pckl'):
-        print('DataBase already saved !')
-        return
-    all_movies = tmdb.Movies()
-    top1000_movies = []
-    print('Pulling movie list, Please wait...')
-    for i in range(1, 51):
-        if i % 15 == 0:
-            time.sleep(7)
-        movies_on_this_page = all_movies.popular(page=i)['results']
-        top1000_movies.extend(movies_on_this_page)
-    len(top1000_movies)
-    f3 = open('movie_list.pckl', 'wb')
-    pickle.dump(top1000_movies, f3)
-    f3.close()
-    print('Done!')
-
-
-def loadMovies():
-    print('Loading Database...')
-    f3 = open('movie_list.pckl', 'rb')
-    top1000_movies = pickle.load(f3)
-    f3.close()
-    print(str(len(top1000_movies)) + ' Loaded movies')
-    return top1000_movies;
-
-
-def buildDataBase():
-    saveMovies()
-    return loadMovies()
 
 
 def list2pairs(l):
@@ -206,14 +174,14 @@ def clover(movies):
             print("Done with ", counter, " movies!")
             print("Trying to get poster for ", title)
         try:
-            grab_poster_tmdb(title)
+            grabPosterTmdb(title)
             time.sleep(1)
             poster_movies.append(movie)
         except Exception as e:
             print('Error on getting poster for ', title, ' caused by , ', str(e) , ', try again...')
             try:
                 time.sleep(7)
-                grab_poster_tmdb(title)
+                grabPosterTmdb(title)
                 poster_movies.append(movie)
             except:
                 movies_no_poster.append(movie)
@@ -254,7 +222,6 @@ def getBinarizedVectorOfGenresForOne(movies, refid):
         if refid in movies[i]['genre_ids']: 
             val = 1
         genres.append(val)
-    from sklearn.preprocessing import LabelBinarizer
     mlb = LabelBinarizer()
     return mlb.fit_transform(genres)
 
@@ -277,13 +244,16 @@ def builingModel():
         print('Model already builded !')
         xdb = open('X.pckl', 'rb')
         ydb = open('Y.pckl', 'rb')
+        ymdb = open('Ymulti.pckl', 'rb')
         X = pickle.load(xdb)
         Y = pickle.load(ydb)
+        Ymulti = pickle.load(ymdb)
         mdb = open('Movies.pckl', 'rb')
         Movies = pickle.load(mdb)
         xdb.close()
         ydb.close()
-        return X, Y, Movies
+        ymdb.close()
+        return X, Y, Ymulti, Movies
     
     pull()
     cleanedMovieList = clean()
@@ -409,7 +379,7 @@ for subY in Ymulti:
     for i in range(X_test_tfidf.shape[0]):
         if(len(predictions) < i+1):
             predictions.append([])
-        if 1 == predstfidf[i]:
+        if 0 != predstfidf[i]:
             predictions[i].append(GenreIDtoName[id]) 
 
 for i in range(X_test_tfidf.shape[0]):
