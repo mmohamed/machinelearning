@@ -109,7 +109,7 @@ def pull():
     allIds = getGenresIds()
     for g_id in allIds:
         baseyear -= 1
-        for page in range(1, 100, 1):
+        for page in range(1, 3, 1):
             time.sleep(0.5)
         
             url = 'https://api.themoviedb.org/3/discover/movie?api_key=' + tmdb.API_KEY
@@ -187,10 +187,10 @@ def clover(movies):
                 movies_no_poster.append(movie)
         counter += 1
     print("Done with all the posters!")    
-    f = open('poster_movies.pckl', 'w')
+    f = open('poster_movies.pckl', 'wb')
     pickle.dump(poster_movies, f)
     f.close()
-    f = open('no_poster_movies.pckl', 'w')
+    f = open('no_poster_movies.pckl', 'wb')
     pickle.dump(movies_no_poster, f)
     f.close()
 
@@ -339,11 +339,14 @@ def calculateMetrics(predictions, GenreIDtoName, testMovies, Movies):
 """
 Start
 """
-#X, Y, Ymulti, Movies = builingModel()
 
-fp = open('poster_movies.pckl', 'rb')
-posterMovies = pickle.load(fp)
-fp.close()
+#pull()
+#cleanedMovieList = clean()
+#clover(cleanedMovieList)
+
+#fp = open('poster_movies.pckl', 'rb')
+#posterMovies = pickle.load(fp)
+#fp.close()
 
 
 import torchvision.models as models
@@ -351,7 +354,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 
 from torch.autograd import Variable
-
+"""
 vgg16 = models.vgg16(pretrained=True)
 
 model = nn.Sequential(*list(vgg16.children())[:-1])
@@ -448,6 +451,13 @@ pickle.dump(listPickled,fp)
 fp.close()
 print('Features dumped to pickle file')
 
+"""
+
+fp = open('posters_new_features.pckl','rb')
+listPickled = pickle.load(fp)
+fp.close()
+(featureList, files, failed, succesful, genreList) = listPickled
+
 print(featureList[0].shape)
 (a,b,c,d) = featureList[0].shape
 
@@ -455,14 +465,14 @@ featureSize = a*b*c*d
 
 npFeatures = np.zeros((len(featureList),featureSize))
 
-print(len(featureList),feature_size)
+print(len(featureList),featureSize)
 
 for i in range(len(featureList)):
     feat = featureList[i]
     reshapedFeat = feat.reshape(1,-1)
     npFeatures[i] = reshapedFeat
 
-X = nPfeatures
+X = npFeatures
 
 mlb = MultiLabelBinarizer()
 Y = mlb.fit_transform(genreList)
@@ -481,7 +491,42 @@ Y_test = Y[~mask]
 
 # Review Training a simple neural network model using these VGG features.
 
+from FeatureDataset import FeatureDataset
+from FeatureDataset import trainModel
+import torch
 
+dsets = {}
+dsets['train'] = FeatureDataset(X_train, Y_train)
+dsets['test'] = FeatureDataset(X_test, Y_test)
+
+dsetLoaders = {x: torch.utils.data.DataLoader(dsets[x], batch_size=64, shuffle=True, num_workers=25) for x in ['train', 'test']}
+
+dsetSizes = {x: len(dsets[x]) for x in ['train', 'test']}
+
+print(dsetSizes)
+
+modelVisual = nn.Sequential(
+    nn.Linear(X.shape[1],1024),  #150528
+    nn.ReLU(),
+    nn.Linear(1024,256),
+    nn.ReLU(),
+    nn.Linear(256,Y_test.shape[1]),
+    nn.Sigmoid()
+)
+# #opt = optimizers.rmsprop(lr=0.0001, decay=1e-6)
+optimizer = torch.optim.RMSprop(modelVisual.parameters(), lr=0.0001, weight_decay=1e-6)
+criterion = nn.BCELoss()
+
+#modelVisual.load_state_dict(torch.load('fine_tuned_best_model.pt'))
+modelFt, YPreds = trainModel(modelVisual, criterion, optimizer, 50, dsetLoaders, dsetSizes)
+
+# Save model
+torch.save(modelFt.state_dict(), 'fine_tuned_best_model.pt')
+#modelFt.save_state_dict('fine_tuned_best_model.pt')
+# #sgd = optimizers.SGD(lr=0.05, decay=1e-6, momentum=0.4, nesterov=False)
+# modelVisual.compile(optimizer=opt,
+#               loss='binary_crossentropy',
+#               metrics=['accuracy'])
 
 
 
@@ -527,7 +572,7 @@ exit(0)
 
 
 
-
+X, Y, Ymulti, Movies = builingModel()
 
 tfidf_transformer = TfidfTransformer()
 X_tfidf = tfidf_transformer.fit_transform(X)
